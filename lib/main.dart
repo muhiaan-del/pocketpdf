@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:dart_pdf_editor_assets/dart_pdf_editor_assets.dart';
 import 'features/viewer/viewer_screen.dart';
 import 'features/scan/scan_screen.dart';
+import 'features/scan/images_to_pdf_screen.dart';
 import 'features/scan/save_service.dart';
 import 'features/utils/rename_dialog.dart';
 
@@ -46,18 +47,48 @@ class HomeScreen extends StatelessWidget {
     );
     if (result == null || !context.mounted) return;
 
-    // Ask the user to name the file before saving.
     final defaultName = 'scan_${DateTime.now().millisecondsSinceEpoch}.pdf';
     final fileName = await RenameDialog.show(context, defaultName);
     if (fileName == null || !context.mounted) return;
 
     final savedPath = await SaveService.savePdf(result, fileName);
-
     if (!context.mounted) return;
 
     if (savedPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to save scan')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Saved to $savedPath')),
+    );
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ViewerScreen(filePath: savedPath),
+      ),
+    );
+  }
+
+  Future<void> _imagesToPdf(BuildContext context) async {
+    final Uint8List? result = await Navigator.of(context).push<Uint8List>(
+      MaterialPageRoute(builder: (_) => const ImagesToPdfScreen()),
+    );
+    if (result == null || !context.mounted) return;
+
+    final defaultName =
+        'images_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final fileName = await RenameDialog.show(context, defaultName);
+    if (fileName == null || !context.mounted) return;
+
+    final savedPath = await SaveService.savePdf(result, fileName);
+    if (!context.mounted) return;
+
+    if (savedPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to save PDF')),
       );
       return;
     }
@@ -92,6 +123,12 @@ class HomeScreen extends StatelessWidget {
               icon: const Icon(Icons.folder_open),
               label: const Text('Open PDF'),
               onPressed: () => ViewerScreen.open(context),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.image),
+              label: const Text('Images to PDF'),
+              onPressed: () => _imagesToPdf(context),
             ),
             if (Platform.isAndroid) ...[
               const SizedBox(height: 12),
