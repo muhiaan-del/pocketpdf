@@ -1,6 +1,11 @@
+import 'dart:io' show Platform;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:dart_pdf_editor_assets/dart_pdf_editor_assets.dart';
 import 'features/viewer/viewer_screen.dart';
+import 'features/scan/scan_screen.dart';
+import 'features/scan/save_service.dart';
+import 'features/utils/rename_dialog.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +40,39 @@ class PocketPdfApp extends StatelessWidget {
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
+  Future<void> _scan(BuildContext context) async {
+    final Uint8List? result = await Navigator.of(context).push<Uint8List>(
+      MaterialPageRoute(builder: (_) => const ScanScreen()),
+    );
+    if (result == null || !context.mounted) return;
+
+    // Ask the user to name the file before saving.
+    final defaultName = 'scan_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final fileName = await RenameDialog.show(context, defaultName);
+    if (fileName == null || !context.mounted) return;
+
+    final savedPath = await SaveService.savePdf(result, fileName);
+
+    if (!context.mounted) return;
+
+    if (savedPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to save scan')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Saved to $savedPath')),
+    );
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ViewerScreen(filePath: savedPath),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -55,6 +93,14 @@ class HomeScreen extends StatelessWidget {
               label: const Text('Open PDF'),
               onPressed: () => ViewerScreen.open(context),
             ),
+            if (Platform.isAndroid) ...[
+              const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                icon: const Icon(Icons.document_scanner),
+                label: const Text('Scan Document'),
+                onPressed: () => _scan(context),
+              ),
+            ],
           ],
         ),
       ),

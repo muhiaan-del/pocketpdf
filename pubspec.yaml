@@ -9,13 +9,19 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  file_picker: ^13.1.0          # Pick PDFs (v13 uses FilePicker.pickFile)
-  path_provider: ^2.1.0         # App directories
-  share_plus: ^13.1.0           # Share/export (win32 6.x compatible)
-  permission_handler: ^11.3.0
+
+  file_picker: ^13.1.0
+  path_provider: ^2.1.0
+  share_plus: ^13.1.0
+  permission_handler: ^12.0.3
   cupertino_icons: ^1.0.6
   dart_pdf_editor: ^5.1.0
   dart_pdf_editor_assets: ^5.1.0
+  cunning_document_scanner: ^2.8.0
+  path: ^1.8.0
+  pdf: ^3.11.1
+  image: ^4.2.0
+  
 
 dev_dependencies:
   flutter_lints: ^4.0.0
