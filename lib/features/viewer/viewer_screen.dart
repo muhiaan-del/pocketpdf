@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:dart_pdf_editor/dart_pdf_editor.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../scan/save_service.dart';
 import '../utils/rename_dialog.dart';
 import '../utils/compress_service.dart';
@@ -41,6 +42,10 @@ class ViewerScreen extends StatefulWidget {
 }
 
 class _ViewerScreenState extends State<ViewerScreen> {
+  // Bumped to v2 so the tip reappears once after this update. Change the
+  // version suffix any time you want the tip shown again in development.
+  static const _tipShownKey = 'pocketpdf_markup_tip_shown_v2';
+
   late final Future<Uint8List> _bytesFuture;
 
   @override
@@ -51,6 +56,37 @@ class _ViewerScreenState extends State<ViewerScreen> {
     } else {
       _bytesFuture = File(widget.filePath!).readAsBytes();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTip());
+  }
+
+  Future<void> _maybeShowTip() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_tipShownKey) == true) return;
+      await prefs.setBool(_tipShownKey, true);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('How to mark up text'),
+          content: const Text(
+            '1. Pick your color with the circle button in the toolbar.\n\n'
+            '2. Long-press a word in the PDF to select it. Drag the blue '
+            'handles to extend the selection.\n\n'
+            '3. Tap Highlight, Underline, Strike out, or Squiggly from the '
+            'popup menu.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Got it'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      // Tip is non-critical; ignore storage errors.
+    }
   }
 
   String get _currentName =>
@@ -58,9 +94,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
       widget.filePath?.split(Platform.pathSeparator).last ??
       'document.pdf';
 
+  String get _baseName => _currentName.replaceAll('.pdf', '');
+
   Future<void> _save(Uint8List bytes) async {
-    final baseName = _currentName.replaceAll('.pdf', '');
-    final fileName = '${baseName}_edited.pdf';
+    final fileName = '${_baseName}_edited.pdf';
     final outPath = await SaveService.savePdf(bytes, fileName);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -108,9 +145,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          saved == null ? 'Rename failed' : 'Saved as $newName',
-        ),
+        content: Text(saved == null ? 'Rename failed' : 'Saved as $newName'),
       ),
     );
   }
@@ -130,10 +165,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
       return;
     }
 
-    final baseName = _currentName.replaceAll('.pdf', '');
     final saved = await SaveService.savePdf(
       result,
-      '${baseName}_compressed.pdf',
+      '${_baseName}_compressed.pdf',
     );
 
     if (!mounted) return;
@@ -202,14 +236,139 @@ class _ViewerScreenState extends State<ViewerScreen> {
             bytes: snapshot.data!,
             onSave: _save,
             features: const PdfEditorFeatures(
+              // DO NOT set `toolGroups` here. Omitting it keeps every group
+              // enabled — including markup — which is what wires up the
+              // built-in text-selection context menu
+              // (Highlight / Underline / Strike out / Squiggly).
+              //
+              // The custom toolbar below replaces the visible chrome, so the
+              // stock markup strip is not drawn anyway. We only restrict
+              // which tools the viewer can arm, via `tools`.
               tools: {
                 PdfEditTool.select,
-                PdfEditTool.highlight,
                 PdfEditTool.ink,
                 PdfEditTool.freeText,
                 PdfEditTool.signature,
               },
             ),
+            toolbarBuilder: (context, editing, viewer) {
+              return _AnnotationToolbar(
+                editing: editing,
+                onSave: _save,
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Custom annotation toolbar.
+///
+/// Markup (highlight / underline / strike out / squiggly) is applied through
+/// the platform context menu, which uses `editing.color` for its colour.
+/// The toolbar therefore exposes:
+/// - Select, Pen, Text, Signature tools
+/// - Color picker (sets `editing.color`)
+/// - Save
+class _AnnotationToolbar extends StatelessWidget {
+  final PdfEditingController editing;
+  final Future<void> Function(Uint8List) onSave;
+
+  const _AnnotationToolbar({
+    required this.editing,
+    required this.onSave,
+  });
+
+  Color? _activeColor(BuildContext context, bool active) =>
+      active ? Theme.of(context).colorScheme.primary : null;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: editing,
+      builder: (context, _) {
+        return BottomAppBar(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Select tool
+              IconButton(
+                icon: const Icon(Icons.touch_app),
+                color: _activeColor(
+                  context,
+                  editing.tool == PdfEditTool.select,
+                ),
+                onPressed: () => editing.tool = PdfEditTool.select,
+                tooltip: 'Select',
+              ),
+              // Pen tool
+              IconButton(
+                icon: const Icon(Icons.edit),
+                color: _activeColor(
+                  context,
+                  editing.tool == PdfEditTool.ink,
+                ),
+                onPressed: () => editing.tool = PdfEditTool.ink,
+                tooltip: 'Pen',
+              ),
+              // Text tool
+              IconButton(
+                icon: const Icon(Icons.text_fields),
+                color: _activeColor(
+                  context,
+                  editing.tool == PdfEditTool.freeText,
+                ),
+                onPressed: () => editing.tool = PdfEditTool.freeText,
+                tooltip: 'Text',
+              ),
+              // Signature tool
+              IconButton(
+                icon: const Icon(Icons.draw),
+                color: _activeColor(
+                  context,
+                  editing.tool == PdfEditTool.signature,
+                ),
+                onPressed: () => editing.tool = PdfEditTool.signature,
+                tooltip: 'Signature',
+              ),
+              const Spacer(),
+              // Color picker — sets editing.color. The context-menu markup
+              // (Highlight / Underline / Strike out / Squiggly) applies in
+              // this color.
+              IconButton(
+                icon: Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: editing.displayColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                ),
+                tooltip: 'Color',
+                onPressed: () async {
+                  final picked = await showPdfColorPicker(
+                    context,
+                    initial: editing.displayColor,
+                    recentColors: editing.preferences.recentColors,
+                    documentColors: editing.documentAnnotationColors(),
+                  );
+                  if (picked != null) {
+                    editing.color = picked;
+                  }
+                },
+              ),
+              // Save button
+              IconButton(
+                icon: const Icon(Icons.save),
+                onPressed: () => onSave(editing.bytes),
+                tooltip: 'Save',
+              ),
+            ],
           ),
         );
       },
