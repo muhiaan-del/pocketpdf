@@ -1,6 +1,16 @@
+﻿import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Load key.properties for release signing.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -21,9 +31,43 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                val storePasswordValue =
+                    keystoreProperties.getProperty("storePassword")
+                val keyPasswordValue =
+                    keystoreProperties.getProperty("keyPassword")
+                val keyAliasValue = keystoreProperties.getProperty("keyAlias")
+                val storeFileValue = keystoreProperties.getProperty("storeFile")
+
+                if (storePasswordValue == null ||
+                    keyPasswordValue == null ||
+                    keyAliasValue == null ||
+                    storeFileValue == null
+                ) {
+                    throw GradleException(
+                        "Missing required keys in key.properties. " +
+                        "Found: ${keystoreProperties.keys}. " +
+                        "Required: storePassword, keyPassword, keyAlias, storeFile."
+                    )
+                }
+
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+                storeFile = file(storeFileValue)
+                storePassword = storePasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -43,5 +87,3 @@ kotlin {
 flutter {
     source = "../.."
 }
-
-// No ML Kit dependencies needed — pdf_ocr_ondevice bundles its own ONNX runtime.
