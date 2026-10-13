@@ -22,6 +22,10 @@ migrate_working_dir/
 #.vscode/
 
 # Flutter/Dart/Pub related
+# Signing
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/

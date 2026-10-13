@@ -3,12 +3,16 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:dart_pdf_editor/dart_pdf_editor.dart';
+import 'package:pdf_document/pdf_document.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../scan/save_service.dart';
 import '../utils/rename_dialog.dart';
 import '../utils/compress_service.dart';
+import '../utils/recent_files_service.dart';
+import '../utils/export_image_service.dart';
+import 'file_info_dialog.dart';
 
 class ViewerScreen extends StatefulWidget {
   final String? filePath;
@@ -42,11 +46,10 @@ class ViewerScreen extends StatefulWidget {
 }
 
 class _ViewerScreenState extends State<ViewerScreen> {
-  // Bumped to v2 so the tip reappears once after this update. Change the
-  // version suffix any time you want the tip shown again in development.
-  static const _tipShownKey = 'pocketpdf_markup_tip_shown_v2';
+  static const _tipShownKey = 'pocketpdf_tip_banner_v1';
 
   late final Future<Uint8List> _bytesFuture;
+  bool _showTipBanner = true;
 
   @override
   void initState() {
@@ -56,37 +59,29 @@ class _ViewerScreenState extends State<ViewerScreen> {
     } else {
       _bytesFuture = File(widget.filePath!).readAsBytes();
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTip());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getBool(_tipShownKey) == true) {
+          if (mounted) setState(() => _showTipBanner = false);
+        }
+      } catch (_) {}
+      _recordRecent();
+    });
   }
 
-  Future<void> _maybeShowTip() async {
+  Future<void> _dismissTip() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (prefs.getBool(_tipShownKey) == true) return;
       await prefs.setBool(_tipShownKey, true);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('How to mark up text'),
-          content: const Text(
-            '1. Pick your color with the circle button in the toolbar.\n\n'
-            '2. Long-press a word in the PDF to select it. Drag the blue '
-            'handles to extend the selection.\n\n'
-            '3. Tap Highlight, Underline, Strike out, or Squiggly from the '
-            'popup menu.',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Got it'),
-            ),
-          ],
-        ),
-      );
-    } catch (_) {
-      // Tip is non-critical; ignore storage errors.
-    }
+    } catch (_) {}
+    if (mounted) setState(() => _showTipBanner = false);
+  }
+
+  Future<void> _recordRecent() async {
+    final path = widget.filePath;
+    if (path == null) return;
+    await RecentFilesService.record(path, _currentName);
   }
 
   String get _currentName =>
@@ -133,6 +128,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
         break;
       case 'compress':
         await _compress(bytes);
+        break;
+      case 'info':
+        await _showFileInfo(bytes);
+        break;
+      case 'export_image':
+        await _exportPageAsImage(bytes);
         break;
     }
   }
@@ -183,6 +184,111 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
+  Future<void> _showFileInfo(Uint8List bytes) async {
+    final path = widget.filePath;
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('File info only available for saved files'),
+        ),
+      );
+      return;
+    }
+    await FileInfoDialog.show(
+      context,
+      filePath: path,
+      displayName: _currentName,
+      bytes: bytes,
+    );
+  }
+
+  Future<void> _exportPageAsImage(Uint8List bytes) async {
+    final doc = PdfDocument.open(bytes);
+
+    final pageInput = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        final controller = TextEditingController(text: '1');
+        return AlertDialog(
+          title: const Text('Export page as image'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('This PDF has ${doc.pageCount} pages.'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Page number',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final n = int.tryParse(controller.text.trim());
+                Navigator.pop(ctx, n);
+              },
+              child: const Text('Export'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (pageInput == null) return;
+    if (pageInput < 1 || pageInput > doc.pageCount) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Page must be between 1 and ${doc.pageCount}'),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Rendering page…')),
+    );
+
+    final png = await ExportImageService.renderPageToPng(
+      bytes,
+      pageInput - 1,
+    );
+
+    if (!mounted) return;
+
+    if (png == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Export failed')),
+      );
+      return;
+    }
+
+    final saved = await SaveService.savePdf(
+      png,
+      '${_baseName}_page$pageInput.png',
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          saved == null ? 'Save failed' : 'Saved to $saved',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Uint8List>(
@@ -228,35 +334,85 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
+                  PopupMenuItem(
+                    value: 'info',
+                    child: ListTile(
+                      leading: Icon(Icons.info_outline),
+                      title: Text('File info'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'export_image',
+                    child: ListTile(
+                      leading: Icon(Icons.image_outlined),
+                      title: Text('Export page as image'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                 ],
               ),
             ],
           ),
-          body: PdfEditorView(
-            bytes: snapshot.data!,
-            onSave: _save,
-            features: const PdfEditorFeatures(
-              // DO NOT set `toolGroups` here. Omitting it keeps every group
-              // enabled — including markup — which is what wires up the
-              // built-in text-selection context menu
-              // (Highlight / Underline / Strike out / Squiggly).
-              //
-              // The custom toolbar below replaces the visible chrome, so the
-              // stock markup strip is not drawn anyway. We only restrict
-              // which tools the viewer can arm, via `tools`.
-              tools: {
-                PdfEditTool.select,
-                PdfEditTool.ink,
-                PdfEditTool.freeText,
-                PdfEditTool.signature,
-              },
-            ),
-            toolbarBuilder: (context, editing, viewer) {
-              return _AnnotationToolbar(
-                editing: editing,
-                onSave: _save,
-              );
-            },
+          body: Column(
+            children: [
+              if (_showTipBanner)
+                Container(
+                  width: double.infinity,
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.touch_app,
+                        size: 18,
+                        color:
+                            Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          Platform.isAndroid
+                              ? 'Long-press to select text, then tap Highlight/Underline in the menu.'
+                              : 'Drag to select text, then right-click for Highlight/Underline.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onPrimaryContainer,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        tooltip: 'Dismiss',
+                        onPressed: _dismissTip,
+                      ),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: PdfEditorView(
+                  bytes: snapshot.data!,
+                  onSave: _save,
+                  features: const PdfEditorFeatures(
+                    tools: {
+                      PdfEditTool.select,
+                      PdfEditTool.ink,
+                      PdfEditTool.freeText,
+                      PdfEditTool.signature,
+                    },
+                  ),
+                  toolbarBuilder: (context, editing, viewer) {
+                    return _AnnotationToolbar(
+                      editing: editing,
+                      onSave: _save,
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -264,14 +420,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 }
 
-/// Custom annotation toolbar.
-///
-/// Markup (highlight / underline / strike out / squiggly) is applied through
-/// the platform context menu, which uses `editing.color` for its colour.
-/// The toolbar therefore exposes:
-/// - Select, Pen, Text, Signature tools
-/// - Color picker (sets `editing.color`)
-/// - Save
 class _AnnotationToolbar extends StatelessWidget {
   final PdfEditingController editing;
   final Future<void> Function(Uint8List) onSave;
@@ -293,7 +441,6 @@ class _AnnotationToolbar extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Select tool
               IconButton(
                 icon: const Icon(Icons.touch_app),
                 color: _activeColor(
@@ -303,7 +450,6 @@ class _AnnotationToolbar extends StatelessWidget {
                 onPressed: () => editing.tool = PdfEditTool.select,
                 tooltip: 'Select',
               ),
-              // Pen tool
               IconButton(
                 icon: const Icon(Icons.edit),
                 color: _activeColor(
@@ -313,7 +459,6 @@ class _AnnotationToolbar extends StatelessWidget {
                 onPressed: () => editing.tool = PdfEditTool.ink,
                 tooltip: 'Pen',
               ),
-              // Text tool
               IconButton(
                 icon: const Icon(Icons.text_fields),
                 color: _activeColor(
@@ -323,7 +468,6 @@ class _AnnotationToolbar extends StatelessWidget {
                 onPressed: () => editing.tool = PdfEditTool.freeText,
                 tooltip: 'Text',
               ),
-              // Signature tool
               IconButton(
                 icon: const Icon(Icons.draw),
                 color: _activeColor(
@@ -334,9 +478,6 @@ class _AnnotationToolbar extends StatelessWidget {
                 tooltip: 'Signature',
               ),
               const Spacer(),
-              // Color picker — sets editing.color. The context-menu markup
-              // (Highlight / Underline / Strike out / Squiggly) applies in
-              // this color.
               IconButton(
                 icon: Container(
                   width: 22,
@@ -362,7 +503,6 @@ class _AnnotationToolbar extends StatelessWidget {
                   }
                 },
               ),
-              // Save button
               IconButton(
                 icon: const Icon(Icons.save),
                 onPressed: () => onSave(editing.bytes),

@@ -1,15 +1,13 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:dart_pdf_editor/dart_pdf_editor.dart';
 import 'package:pdf_document/pdf_document.dart';
-import 'package:pdf_graphics/pdf_graphics.dart';
-import 'package:image/image.dart' as img;
 
 class ExportImageService {
   /// Renders a single page of a PDF to PNG bytes.
   ///
-  /// [pageIndex] is zero-based.
-  /// [pixelRatio] scales the output (2.0 = 2x resolution).
-  ///
-  /// Returns null if rendering failed.
+  /// [pageIndex] is zero-based. [pixelRatio] scales the output
+  /// (2.0 = 2x resolution). Returns null if rendering failed.
   static Future<Uint8List?> renderPageToPng(
     Uint8List pdfBytes,
     int pageIndex, {
@@ -17,34 +15,29 @@ class ExportImageService {
   }) async {
     try {
       final doc = PdfDocument.open(pdfBytes);
-      if (pageIndex < 0 || pageIndex >= doc.pages.length) return null;
+      if (pageIndex < 0 || pageIndex >= doc.pageCount) return null;
 
-      final page = doc.pages[pageIndex];
-      final pageWidth = (page.width * pixelRatio).round();
-      final pageHeight = (page.height * pixelRatio).round();
+      final page = doc.page(pageIndex);
 
-      final pdfImage = await page.render(
-        width: pageWidth,
-        height: pageHeight,
+      // PdfPageRenderer is from dart_pdf_editor; it returns a ui.Image.
+      final image = await PdfPageRenderer.renderImage(
+        page,
+        pixelRatio: pixelRatio,
       );
-      await pdfImage.createImage();
-
-      final w = pdfImage.width;
-      final h = pdfImage.height;
-      final pixels = pdfImage.pixels;
-
-      final out = img.Image(width: w, height: h);
-      for (var y = 0; y < h; y++) {
-        for (var x = 0; x < w; x++) {
-          final i = (y * w + x) * 4;
-          final r = pixels[i];
-          final g = pixels[i + 1];
-          final b = pixels[i + 2];
-          out.setPixelRgb(x, y, r, g, b);
-        }
+      try {
+        final data = await image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        if (data == null) return null;
+        return Uint8List.fromList(
+          data.buffer.asUint8List(
+            data.offsetInBytes,
+            data.lengthInBytes,
+          ),
+        );
+      } finally {
+        image.dispose();
       }
-
-      return Uint8List.fromList(img.encodePng(out));
     } catch (_) {
       return null;
     }
